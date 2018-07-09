@@ -208,6 +208,11 @@ public abstract class BaseKubeClient<K extends BaseKubeClient<K>> implements Kub
         return Exec.exec(cmd);
     }
 
+    @Override
+    public ProcessResult execInKubeWorkspace(String... command) {
+        return Exec.exec(asList(command));
+    }
+
     enum ExType {
         BREAK,
         CONTINUE,
@@ -234,13 +239,12 @@ public abstract class BaseKubeClient<K extends BaseKubeClient<K>> implements Kub
     }
 
     @Override
-    public K waitForDeployment(String name) {
-        return waitFor("deployment", name, actualObj -> {
+    public K waitForResourceReady(String resourceType, String name) {
+        return waitFor(resourceType, name, actualObj -> {
             JsonNode replicasNode = actualObj.get("status").get("replicas");
             JsonNode readyReplicasName = actualObj.get("status").get("readyReplicas");
             return replicasNode != null && readyReplicasName != null
                     && replicasNode.asInt() == readyReplicasName.asInt();
-
         });
     }
 

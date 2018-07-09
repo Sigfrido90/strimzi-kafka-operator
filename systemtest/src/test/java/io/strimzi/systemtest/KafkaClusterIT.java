@@ -19,7 +19,6 @@ import io.strimzi.test.Topic;
 import io.strimzi.test.k8s.Oc;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -65,12 +64,6 @@ public class KafkaClusterIT extends AbstractClusterIT {
     private static final String CLUSTER_NAME = "my-cluster";
     private static final String TOPIC_NAME = "test-topic";
     private static final String CO_DEPLOYMENT_CONFIG = "../examples/install/cluster-operator/07-deployment.yaml";
-
-    @BeforeClass
-    public static void waitForCc() {
-        // TODO Build this into the annos, or get rid of the annos
-        //cluster.client().waitForDeployment("strimzi-cluster-operator");
-    }
 
     @Test
     @JUnitGroup(name = "regression")
@@ -298,14 +291,14 @@ public class KafkaClusterIT extends AbstractClusterIT {
     }
 
     @Test
-    @JUnitGroup(name = "regression")
+//    @JUnitGroup(name = "regression")
     @KafkaCluster(name = CLUSTER_NAME, kafkaNodes = 3, config = {
             @CmData(key = "kafka-config", value = "{\"default.replication.factor\": 3,\"offsets.topic.replication.factor\": 3,\"transaction.state.log.replication.factor\": 3}")
             })
     @Topic(name = TOPIC_NAME, clusterName = "my-cluster")
     public void testSendMessages() {
         int messagesCount = 20;
-        sendMessages(CLUSTER_NAME, TOPIC_NAME, messagesCount, 1);
+        sendMessages(kafkaPodName(CLUSTER_NAME, 1), CLUSTER_NAME, TOPIC_NAME, messagesCount);
         String consumedMessages = consumeMessages(CLUSTER_NAME, TOPIC_NAME, 1, 30, 2);
 
         assertThat(consumedMessages, hasJsonPath("$[*].count", hasItem(messagesCount)));

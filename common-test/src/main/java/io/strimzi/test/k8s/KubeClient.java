@@ -89,12 +89,20 @@ public interface KubeClient<K extends KubeClient<K>> {
     ProcessResult exec(String pod, String... command);
 
     /**
-     * Wait for the deployment with the given {@code name} to
+     * Execute the given {@code command} in the kubernetes workspace.
+     * @param command The command
+     * @return The process result.
+     */
+    ProcessResult execInKubeWorkspace(String... command);
+
+    /**
+     * Wait for the resource with the given {@code name} by {@code resourceType} to
      * have replicas==readyReplicas.
+     * @param resourceType The resource type.
      * @param name The deployment name.
      * @return This kube client.
      */
-    K waitForDeployment(String name);
+    K waitForResourceReady(String resourceType, String name);
 
     /**
      * Wait for the pod with the given {@code name} to be in the ready state.

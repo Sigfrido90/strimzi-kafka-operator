@@ -8,12 +8,15 @@ import io.fabric8.kubernetes.api.model.Event;
 import io.strimzi.test.ClusterOperator;
 import io.strimzi.test.CmData;
 import io.strimzi.test.ConnectCluster;
+import io.strimzi.test.ConnectS2ICluster;
 import io.strimzi.test.JUnitGroup;
 import io.strimzi.test.KafkaCluster;
 import io.strimzi.test.Namespace;
 import io.strimzi.test.OpenShiftOnly;
 import io.strimzi.test.Resources;
 import io.strimzi.test.StrimziRunner;
+import io.strimzi.test.TestUtils;
+import io.strimzi.test.Topic;
 import io.strimzi.test.k8s.Oc;
 
 import org.apache.logging.log4j.LogManager;
@@ -37,7 +40,10 @@ import static io.strimzi.systemtest.k8s.Events.Unhealthy;
 import static io.strimzi.systemtest.matchers.Matchers.hasAllOfReasons;
 import static io.strimzi.systemtest.matchers.Matchers.hasNoneOfReasons;
 import static io.strimzi.systemtest.matchers.Matchers.valueOfCmEquals;
+import static io.strimzi.test.TestUtils.getFileAsString;
 import static io.strimzi.test.TestUtils.map;
+import static io.strimzi.test.TestUtils.waitFor;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasItem;
 import static org.junit.Assert.assertEquals;
@@ -65,6 +71,12 @@ public class ConnectClusterIT extends AbstractClusterIT {
     public static final String CONNECT_CLUSTER_NAME = "my-cluster";
     public static final String KAFKA_CONNECT_BOOTSTRAP_SERVERS = KAFKA_CLUSTER_NAME + "-kafka:9092";
     public static final String KAFKA_CONNECT_BOOTSTRAP_SERVERS_ESCAPED = KAFKA_CLUSTER_NAME + "-kafka\\:9092";
+    public static final String CONNECT_CONFIG_CONVERTER_SCHEMAS_DISABLED = "{\n" +
+            "\"bootstrap.servers\": \"" + KAFKA_CONNECT_BOOTSTRAP_SERVERS + "\", " +
+            "\"key.converter.schemas.enable\": \"" + "false" + "\", " +
+            "\"value.converter.schemas.enable\": \"" + "false" + "\"" +
+            "}";
+
     public static final String CONNECT_CONFIG = "{\n" +
             "      \"bootstrap.servers\": \"" + KAFKA_CONNECT_BOOTSTRAP_SERVERS + "\"" +
             "    }";
@@ -93,7 +105,7 @@ public class ConnectClusterIT extends AbstractClusterIT {
         oc.newApp("strimzi-connect", map("CLUSTER_NAME", clusterName,
                 "KAFKA_CONNECT_BOOTSTRAP_SERVERS", KAFKA_CONNECT_BOOTSTRAP_SERVERS));
         String deploymentName = clusterName + "-connect";
-        oc.waitForDeployment(deploymentName);
+        oc.waitForResourceReady("deployment", deploymentName);
         testDockerImagesForKafkaConnect();
         oc.deleteByName("cm", clusterName);
         oc.waitForResourceDeletion("deployment", deploymentName);
@@ -111,6 +123,40 @@ public class ConnectClusterIT extends AbstractClusterIT {
         assertEquals(EXPECTED_CONFIG.replaceAll("\\p{P}", ""), getValueFromJson(kafkaPodJson,
                 globalVariableJsonPathBuilder("KAFKA_CONNECT_CONFIGURATION")));
         testDockerImagesForKafkaConnect();
+    }
+
+    @Test
+    @JUnitGroup(name = "regression")
+    @ConnectS2ICluster(name = CONNECT_CLUSTER_NAME, connectConfig = CONNECT_CONFIG_CONVERTER_SCHEMAS_DISABLED)
+    public void testDeployS2IWithMongoDBPlugin() {
+        String pathToDebeziumMongodb = "https://repo1.maven.org/maven2/io/debezium/debezium-connector-mongodb/0.3.0/debezium-connector-mongodb-0.3.0-plugin.tar.gz";
+        // Create directory for plugin
+        kubeClient.execInKubeWorkspace("mkdir", "-p", "./my-plugins/");
+        // Download and unzip MongoDB plugin
+        kubeClient.execInKubeWorkspace("wget", "-O", "debezium-connector-mongodb-plugin.tar.gz", "-P", "./my-plugins/", pathToDebeziumMongodb);
+        kubeClient.execInKubeWorkspace("tar", "xf", "debezium-connector-mongodb-plugin.tar.gz", "-C", "./my-plugins/");
+        // Start a new image build using the plugins directory
+        kubeClient.execInKubeWorkspace("oc", "start-build", "my-cluster-connect", "--from-dir", "./my-plugins/");
+        // Wait 60 secs for message about adding MongoDB plugin to cluster connect
+        waitFor("Wait message in pod log", 5000, 60000,
+            () -> !kubeClient.searchInLog("deploymentConfig", "my-cluster-connect", stopwatch.runtime(SECONDS), "\"Added plugin \'io.debezium.connector.mongodb.MongoDbConnector\'\"").isEmpty());
+    }
+
+    @Test
+    @JUnitGroup(name = "regression")
+    @Topic(name = TEST_TOPIC_NAME, clusterName = KAFKA_CLUSTER_NAME)
+    @ConnectCluster(name = CONNECT_CLUSTER_NAME, connectConfig = CONNECT_CONFIG_CONVERTER_SCHEMAS_DISABLED)
+    public void testKafkaConnectWithFileSinkPlugin() {
+
+        String connectorConfig = getFileAsString("../systemtest/src/test/resources/file/sink/connector.json");
+        String kafkaConnectPodName = kubeClient.listResourcesByLabel("pod", "strimzi.io/type=kafka-connect").get(0);
+        kubeClient.exec(kafkaConnectPodName, "/bin/bash", "-c", "curl -X POST -H \"Content-Type: application/json\" --data "
+                + "'" + connectorConfig + "'" + " http://localhost:8083/connectors");
+
+        sendMessages(kafkaConnectPodName, KAFKA_CLUSTER_NAME, TEST_TOPIC_NAME, 2);
+
+        TestUtils.waitFor("messages in file sink", 1_000, 30_000,
+            () -> kubeClient.exec(kafkaConnectPodName, "/bin/bash", "-c", "cat /tmp/test-file-sink.txt").out().equals("0\n1\n"));
     }
 
     @Test
@@ -144,7 +190,7 @@ public class ConnectClusterIT extends AbstractClusterIT {
 
         LOGGER.info("Scaling up to {}", scaleTo);
         replaceCm(CONNECT_CLUSTER_NAME, "nodes", String.valueOf(initialReplicas + 1));
-        kubeClient.waitForDeployment(kafkaConnectName(CONNECT_CLUSTER_NAME));
+        kubeClient.waitForResourceReady("deployment", kafkaConnectName(CONNECT_CLUSTER_NAME));
         connectPods = kubeClient.listResourcesByLabel("pod", "strimzi.io/type=kafka-connect");
         assertEquals(scaleTo, connectPods.size());
         for (String pod : connectPods) {
@@ -186,7 +232,7 @@ public class ConnectClusterIT extends AbstractClusterIT {
         changes.put("healthcheck-timeout", "6");
         replaceCm(CONNECT_CLUSTER_NAME, changes);
 
-        kubeClient.waitForDeployment(kafkaConnectName(CONNECT_CLUSTER_NAME));
+        kubeClient.waitForResourceReady("deployment", kafkaConnectName(CONNECT_CLUSTER_NAME));
         for (int i = 0; i < connectPods.size(); i++) {
             kubeClient.waitForResourceDeletion("pod", connectPods.get(i));
         }

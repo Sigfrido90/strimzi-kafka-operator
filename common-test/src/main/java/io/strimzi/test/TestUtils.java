@@ -11,6 +11,8 @@ import org.apache.logging.log4j.Logger;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
@@ -77,6 +79,15 @@ public final class TestUtils {
             sb.append("    ").append(line).append(System.lineSeparator());
         }
         return sb.toString();
+    }
+
+    public static String getFileAsString(String filePath) {
+        try {
+            return new String(Files.readAllBytes(Paths.get(filePath)), "UTF-8");
+        } catch (IOException e) {
+            LOGGER.info("File with path {} not found", filePath);
+        }
+        return "";
     }
 
     public static JsonNode yamlFileToJSON(String relativeFilePath) {
